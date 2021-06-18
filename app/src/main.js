@@ -5610,3 +5610,7 @@ if (!firstLaunch) {
     ipcRenderer.send('update-flags', flags);
   }
 }
+
+if (sessionStorage.getItem('updateVsersion')) {
+  document.querySelector('#settings-btn')?.classList.add('active-badge');
+}
