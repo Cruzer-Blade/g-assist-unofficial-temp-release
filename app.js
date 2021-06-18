@@ -7,13 +7,17 @@ const fs = require('fs');
 const os = require('os');
 const { argv } = require('process');
 const isValidAccelerator = require('electron-is-accelerator');
-const { getNativeKeyName } = require('./app/src/keybinding.js');
-const { fallbackModeConfigKeys } = require('./app/src/common/utils.js');
+const { getNativeKeyName } = require('./app/src/keybinding');
+const { fallbackModeConfigKeys } = require('./app/src/common/utils');
+
+// Updater daemon
+const UpdaterService = require('./app/src/updater/updaterMain');
 
 const {
   app,
   BrowserWindow,
   Menu,
+  MenuItem,
   nativeImage,
   ipcMain,
   shell: electronShell,
@@ -26,12 +30,18 @@ let assistantWindowLaunchArgs = {};
 global.releases = null;
 global.firstLaunch = true;
 
+/** @type {UpdaterService | undefined} */
+let updater;
+
 const gotInstanceLock = app.requestSingleInstanceLock();
 
 const userDataPath = app.getPath('userData');
 const configFilePath = path.join(userDataPath, 'config.json');
 const logFilePath = path.join(userDataPath, 'main_process-debug.log');
-let assistantConfig = require('./app/src/common/initialConfig.js');
+const flagsFilePath = path.join(userDataPath, 'flags.json');
+
+let assistantConfig = require('./app/src/common/initialConfig');
+let flags = require('./app/src/common/initialFlags');
 
 if (process.platform === 'darwin') {
   // Quit the app when the system is about to shutdown
@@ -115,6 +125,17 @@ if (fs.existsSync(configFilePath)) {
 }
 else {
   debugLog('Config file does not exist.');
+}
+
+if (fs.existsSync(flagsFilePath)) {
+  debugLog('Reading flags');
+  const savedFlags = JSON.parse(fs.readFileSync(flagsFilePath));
+
+  Object.assign(flags, savedFlags);
+  debugLog('Successfully read flags');
+}
+else {
+  debugLog('Flags file does not exist.');
 }
 
 // Set TMPDIR environment variable for linux snap
@@ -330,9 +351,15 @@ function onAppReady() {
       debugLog('Setting "Ready for launch" tray icon');
       tray.setImage(trayIcon);
 
-      if (!assistantConfig['hideOnFirstLaunch']) {
+      if (!assistantConfig['hideOnFirstLaunch'] || flags.appVersion !== `v${app.getVersion()}`) {
         if (!openedAtLogin) {
-          debugLog('Revealing assistant ["hideOnFirstLaunch" = false]');
+          if (!assistantConfig['hideOnFirstLaunch']) {
+            debugLog('Revealing assistant ["hideOnFirstLaunch" = false]');
+          }
+          else {
+            debugLog('Revealing assistant [recently updated]');
+          }
+
           launchAssistant();
         }
       }
@@ -435,6 +462,13 @@ function onAppReady() {
 
   ipcMain.on('update-config', (_, config) => {
     assistantConfig = config;
+
+    // Set `shouldAutoDownload` property for updater
+    updater.shouldAutoDownload = assistantConfig.autoDownloadUpdates;
+  });
+
+  ipcMain.on('update-flags', (_, updatedFlags) => {
+    flags = updatedFlags;
   });
 
   ipcMain.on('set-assistant-window-position', (_) => {
@@ -452,6 +486,23 @@ function onAppReady() {
   ipcMain.on('restart-normal', () => {
     restartInNormalMode();
   });
+
+  updater = new UpdaterService(mainWindow, app, assistantConfig.autoDownloadUpdates);
+
+  // Initialize Updater Service
+  updater.initializeUpdater(() => {
+    setTrayContextMenu(assistantConfig.assistantHotkey, true);
+    mainWindow.webContents.send('update:updateReady');
+
+    displayNotification({
+      title: 'Update Ready',
+      body: 'Update has been downloaded. Restart app to install the update...',
+      onNotificationClick: () => {
+        if (!mainWindow.isVisible()) launchAssistant();
+        else mainWindow.focus();
+      },
+    });
+  });
 }
 
 /**
@@ -460,6 +511,55 @@ function onAppReady() {
 function requestMicToggle() {
   debugLog('Requested microphone toggle');
   mainWindow.webContents.send('request-mic-toggle');
+}
+
+/**
+ * Displays Notifications. On Windows, a balloon is displayed
+ * instead of using the Notification API.
+ *
+ * @param {object} opts
+ * @param {string} opts.title
+ * @param {string} opts.body
+ * @param {{type: string, text: string, onClick: Function}[]?} opts.actions
+ * @param {Function?} opts.onNotificationClick
+ */
+function displayNotification(opts) {
+  const icon = nativeImage.createFromPath(
+    path.join(__dirname, 'app', 'res', 'icons', 'icon.png'),
+  );
+
+  if (process.platform === 'win32') {
+    tray.displayBalloon({
+      title: opts.title,
+      content: opts.body,
+      icon,
+    });
+
+    tray.on('balloon-click', () => {
+      opts.onNotificationClick?.();
+    });
+  }
+  else {
+    const notification = new electron.Notification({
+      title: opts.title,
+      body: opts.body,
+      icon,
+      actions: opts.actions?.map((actionObj) => ({
+        text: actionObj.text,
+        type: actionObj.type,
+      })),
+    });
+
+    notification.on('action', (_, index) => {
+      opts.actions?.[index].onClick();
+    });
+
+    notification.on('click', () => {
+      opts.onNotificationClick?.();
+    });
+
+    notification.show();
+  }
 }
 
 /**
@@ -568,8 +668,12 @@ function getDisplayIndex(displayList) {
  * @param {string} assistantHotkey
  * Accelerator for assistant hotkey. Used for showing the
  * accelerator alongside the "Launch Assistant" label.
+ *
+ * @param {boolean} isUpdateReady
+ * If set to `true`, the update related options in the
+ * context menu will be set.
  */
-function setTrayContextMenu(assistantHotkey) {
+function setTrayContextMenu(assistantHotkey, isUpdateReady = false) {
   const trayContextMenu = Menu.buildFromTemplate([
     {
       label: 'Launch Assistant',
@@ -626,16 +730,36 @@ function setTrayContextMenu(assistantHotkey) {
       ],
     },
     {
-      label: 'Quit',
+      label: !isUpdateReady ? 'Quit' : 'Quit and Update',
       click: () => {
-        quitApp();
+        if (isUpdateReady) {
+          updater.quitAndInstallUpdate();
+        }
+        else {
+          quitApp();
+        }
       },
+    },
+    {
+      type: 'separator',
     },
     {
       label: `v${electron.app.getVersion()}`,
       enabled: false,
     },
   ]);
+
+  if (isUpdateReady) {
+    trayContextMenu.insert(
+      trayContextMenu.items.length - 1,
+      new MenuItem({
+        label: 'Restart to Update',
+        click: () => {
+          updater.installUpdateAndRestart();
+        },
+      }),
+    );
+  }
 
   tray.setContextMenu(trayContextMenu);
 }

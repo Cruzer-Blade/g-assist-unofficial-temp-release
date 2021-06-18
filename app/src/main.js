@@ -35,6 +35,8 @@ const themes = require('./common/themes');
 const Microphone = require('./lib/microphone');
 const AudioPlayer = require('./lib/audio_player');
 const { fallbackModeConfigKeys } = require('./common/utils');
+const UpdaterRenderer = require('./updater/updaterRenderer');
+const UpdaterStatus = require('./updater/updaterStatus');
 
 const { ipcRenderer } = electron;
 const { app, dialog } = electron.remote;
@@ -50,7 +52,9 @@ let mic = new Microphone();
 
 const userDataPath = app.getPath('userData');
 const configFilePath = path.join(userDataPath, 'config.json');
+const flagsFilePath = path.join(userDataPath, 'flags.json');
 let assistantConfig = require('./common/initialConfig');
+const flags = require('./common/initialFlags');
 
 const history = [];
 let historyHead = -1;
@@ -232,6 +236,13 @@ else {
   }
 }
 
+// Load global flags
+
+if (fs.existsSync(flagsFilePath)) {
+  const savedFlags = JSON.parse(fs.readFileSync(flagsFilePath));
+  Object.assign(flags, savedFlags);
+}
+
 // Setup Assistant Window
 
 setTheme();
@@ -297,6 +308,24 @@ if (assistantConfig['respondToHotword']) {
     audPlayer.setDeviceId(assistantConfig.speakerSource);
   }
 })();
+
+const updaterRenderer = new UpdaterRenderer();
+updaterRenderer.autoDownloadUpdates = assistantConfig.autoDownloadUpdates;
+
+updaterRenderer.onUpdateAvailable = (info) => {
+  // If auto-updates are disabled, notify the user
+  // that a new update is available
+
+  if (!assistantConfig.autoDownloadUpdates) {
+    displayQuickMessage('Update Available!');
+  }
+
+  sessionStorage.setItem('updateVersion', info.version);
+};
+
+updaterRenderer.onUpdateDownloaded = () => {
+  displayQuickMessage('Restart app to update');
+};
 
 const config = {
   auth: {
@@ -2151,6 +2180,45 @@ async function openConfig(configItem = null) {
                   </div>
                 </div>
               </div>
+              <div id="config-item__update-options" style="
+                margin-top: 30px;
+                padding: 10px 20px;
+                border: 2px solid var(--color-accent);
+                border-radius: 10px;
+              ">
+                <div style="display: flex; gap: 30px; padding: 5px 0;">
+                  <div class="setting-key">
+                    Enable Auto-Update
+                  </div>
+                  <div class="setting-value" style="height: 35px; margin-left: 71px;">
+                    <label class="switch">
+                      <input id="auto-update" type="checkbox">
+                      <span class="slider round"></span>
+                    </label>
+                  </div>
+                </div>
+                <hr style="border-color: var(--color-fg-light); margin: 5px 0;">
+                <div style="display: flex; gap: 30px; padding: 5px 0;">
+                  <div class="setting-key">
+                    Download installer externally
+                  </div>
+                  <div class="setting-value" style="height: 35px;">
+                    <label class="button setting-item-button" id="download-external-btn">
+                      <span>
+                        <img src="../res/open_link.svg" style="
+                          height: 16px;
+                          width: 16px;
+                          vertical-align: sub;
+                          padding-right: 5px;
+                          ${getEffectiveTheme() === 'light' ? 'filter: invert(1);' : ''}"
+                        >
+                      </span>
+
+                      Download installer
+                    </label>
+                  </div>
+                </div>
+              </div>
               <div style="margin-top: 40px;">
                 <div class="disabled" style="margin-bottom: 5px;">
                   Google Assistant Unofficial Desktop Client is an open source project
@@ -2315,6 +2383,7 @@ async function openConfig(configItem = null) {
     const speakerSourceSelector = document.querySelector('#speaker-source-selector');
     const displayPreferenceSelector = document.querySelector('#display-selector');
     const winBorderSelector = document.querySelector('#win-border-selector');
+    const autoDownloadUpdates = document.querySelector('#auto-update');
     const launchAtStartUp = document.querySelector('#launch-at-startup');
     const notifyOnStartUp = document.querySelector('#notify-on-startup');
     const alwaysCloseToTray = document.querySelector('#close-to-tray');
@@ -2505,6 +2574,7 @@ async function openConfig(configItem = null) {
     speakerSourceSelector.value = assistantConfig['speakerSource'];
     displayPreferenceSelector.value = assistantConfig['displayPreference'];
     winBorderSelector.value = assistantConfig['windowBorder'];
+    autoDownloadUpdates.checked = assistantConfig['autoDownloadUpdates'];
     launchAtStartUp.checked = assistantConfig['launchAtStartup'];
     notifyOnStartUp.checked = assistantConfig['notifyOnStartup'];
     alwaysCloseToTray.checked = assistantConfig['alwaysCloseToTray'];
@@ -2671,125 +2741,170 @@ async function openConfig(configItem = null) {
       }
     };
 
-    const checkForUpdates = async () => {
-      const checkForUpdateSection = document.querySelector('#check-for-update-section');
+    /** @type {HTMLElement} */
+    const downloadExternallyButton = document.querySelector('#download-external-btn');
 
-      checkForUpdateSection.innerHTML = `
-        <div style="animation: fade_in_from_right_anim 300ms;">
-          <div class="disabled" style="margin-bottom: 10px; font-size: 16px;">
-            Checking for updates...
-          </div>
-          <div class="loader"></div>
-        </div>
-      `;
+    downloadExternallyButton.onclick = () => {
+      const updateVersion = sessionStorage.getItem('updateVersion');
+      const releasesUrl = 'https://github.com/Melvin-Abraham/Google-Assistant-Unofficial-Desktop-Client/releases';
 
-      try {
-        // eslint-disable-next-line no-shadow
-        const releases = await getReleases();
+      if (updateVersion) {
+        const latestReleaseUrl = `${releasesUrl}/tag/v${updateVersion}`;
+        electronShell.openExternal(latestReleaseUrl);
+      }
+      else {
+        const res = dialog.showMessageBoxSync(assistantWindow, {
+          type: 'info',
+          message: 'No new updates available',
+          detail: 'There are no new updates to download at the moment',
+          buttons: [
+            'Show all releases',
+            'OK',
+          ],
+          cancelId: 1,
+        });
 
-        if (releases) {
-          console.group(...consoleMessage('Fetched releases'));
-          console.log(releases);
-
-          if (releases[0] === 'Error') {
-            throw Error(releases[1]);
-          }
-
-          console.groupEnd();
-
-          if (releases[0].tag_name !== `v${app.getVersion()}`) {
-            checkForUpdateSection.innerHTML = `
-              <div style="animation: fade_in_from_right_anim 300ms;">
-                <span>
-                  <img src="../res/download.svg" style="
-                    height: 20px;
-                    width: 20px;
-                    vertical-align: bottom;
-                    padding-right: 5px;"
-                  >
-                </span>
-                <span style="vertical-align: -webkit-baseline-middle; margin-right: 15px;">
-                  New update available:
-                  <span style="color: #1e90ff;">
-                    ${releases[0].tag_name}
-                  </span>
-                </span>
-                <label id="download-update-btn" class="button setting-item-button" onclick="downloadAssistant()">
-                  Download update
-                </label>
-                <span
-                  id="check-for-update-btn"
-                  class="hyperlink"
-                  style="margin-left: 10px; color: #999; vertical-align: bottom;"
-                >
-                  Recheck
-                </span>
-              </div>
-            `;
-          }
-          else {
-            checkForUpdateSection.innerHTML = `
-              <div style="animation: fade_in_from_right_anim 300ms;">
-                <span>
-                  <img src="../res/checkmark.svg" style="
-                    height: 20px;
-                    width: 20px;
-                    vertical-align: sub;
-                    padding-right: 5px;"
-                  >
-                </span>
-                <span>
-                  You have the latest version installed
-                </span>
-                <span
-                  id="check-for-update-btn"
-                  class="hyperlink"
-                  style="margin-left: 10px; color: #999;"
-                >
-                  Check for Updates
-                </span>
-              </div>
-            `;
-          }
+        if (res === 0) {
+          electronShell.openExternal(releasesUrl);
         }
       }
-      catch (error) {
-        console.group(...consoleMessage(
-          'Error while fetching releases',
-          'error',
-        ));
-        console.error(error);
-        console.groupEnd();
-
-        checkForUpdateSection.innerHTML = `
-          <div style="animation: fade_in_from_right_anim 300ms;">
-            <span>
-              <img src="../res/error.svg" style="
-                height: 20px;
-                width: 20px;
-                vertical-align: sub;
-                padding-right: 5px;"
-              >
-            </span>
-            <span style="color: var(--color-red);">
-              An error occurred while checking for updates
-            </span>
-            <span
-              id="check-for-update-btn"
-              class="hyperlink"
-              style="margin-left: 10px;"
-            >
-              Retry
-            </span>
-          </div>
-        `;
-      }
-
-      const checkForUpdateButton = document.querySelector('#check-for-update-btn');
-      if (checkForUpdateButton) checkForUpdateButton.onclick = checkForUpdates;
     };
 
-    document.querySelector('#check-for-update-btn').onclick = checkForUpdates;
+    // const checkForUpdates = async () => {
+    //   const checkForUpdateSection = document.querySelector('#check-for-update-section');
+
+    //   checkForUpdateSection.innerHTML = `
+    //     <div style="animation: fade_in_from_right_anim 300ms;">
+    //       <div class="disabled" style="margin-bottom: 10px; font-size: 16px;">
+    //         Checking for updates...
+    //       </div>
+    //       <div class="loader"></div>
+    //     </div>
+    //   `;
+
+    //   try {
+    //     // eslint-disable-next-line no-shadow
+    //     const releases = await getReleases();
+
+    //     if (releases) {
+    //       console.group(...consoleMessage('Fetched releases'));
+    //       console.log(releases);
+
+    //       if (releases[0] === 'Error') {
+    //         throw Error(releases[1]);
+    //       }
+
+    //       console.groupEnd();
+
+    //       if (releases[0].tag_name !== `v${app.getVersion()}`) {
+    //         checkForUpdateSection.innerHTML = `
+    //           <div style="animation: fade_in_from_right_anim 300ms;">
+    //             <span>
+    //               <img src="../res/download.svg" style="
+    //                 height: 20px;
+    //                 width: 20px;
+    //                 vertical-align: bottom;
+    //                 padding-right: 5px;"
+    //               >
+    //             </span>
+    //             <span style="vertical-align: -webkit-baseline-middle; margin-right: 15px;">
+    //               New update available:
+    //               <span style="color: #1e90ff;">
+    //                 ${releases[0].tag_name}
+    //               </span>
+    //             </span>
+    //             <label id="download-update-btn" class="button setting-item-button" onclick="downloadAssistant()">
+    //               Download update
+    //             </label>
+    //             <span
+    //               id="check-for-update-btn"
+    //               class="hyperlink"
+    //               style="margin-left: 10px; color: #999; vertical-align: bottom;"
+    //             >
+    //               Recheck
+    //             </span>
+    //           </div>
+    //         `;
+    //       }
+    //       else {
+    //         checkForUpdateSection.innerHTML = `
+    //           <div style="animation: fade_in_from_right_anim 300ms;">
+    //             <span>
+    //               <img src="../res/checkmark.svg" style="
+    //                 height: 20px;
+    //                 width: 20px;
+    //                 vertical-align: sub;
+    //                 padding-right: 5px;"
+    //               >
+    //             </span>
+    //             <span>
+    //               You have the latest version installed
+    //             </span>
+    //             <span
+    //               id="check-for-update-btn"
+    //               class="hyperlink"
+    //               style="margin-left: 10px; color: #999;"
+    //             >
+    //               Check for Updates
+    //             </span>
+    //           </div>
+    //         `;
+    //       }
+    //     }
+    //   }
+    //   catch (error) {
+    //     console.group(...consoleMessage(
+    //       'Error while fetching releases',
+    //       'error',
+    //     ));
+    //     console.error(error);
+    //     console.groupEnd();
+
+    //     checkForUpdateSection.innerHTML = `
+    //       <div style="animation: fade_in_from_right_anim 300ms;">
+    //         <span>
+    //           <img src="../res/error.svg" style="
+    //             height: 20px;
+    //             width: 20px;
+    //             vertical-align: sub;
+    //             padding-right: 5px;"
+    //           >
+    //         </span>
+    //         <span style="color: var(--color-red);">
+    //           An error occurred while checking for updates
+    //         </span>
+    //         <span
+    //           id="check-for-update-btn"
+    //           class="hyperlink"
+    //           style="margin-left: 10px;"
+    //         >
+    //           Retry
+    //         </span>
+    //       </div>
+    //     `;
+    //   }
+
+    //   const checkForUpdateButton = document.querySelector('#check-for-update-btn');
+    //   if (checkForUpdateButton) checkForUpdateButton.onclick = checkForUpdates;
+    // };
+
+    // Set Updater Status
+
+    document.querySelector('#check-for-update-btn').onclick = () => UpdaterRenderer.requestCheckForUpdates();
+
+    if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateDownloaded) {
+      updaterRenderer.setRestartToUpdateSection();
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateAvailable) {
+      const updaterCurrentInfo = JSON.parse(sessionStorage.getItem('updaterCurrentInfo'));
+      updaterRenderer.setDownloadUpdateSection(updaterCurrentInfo);
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateNotAvailable) {
+      updaterRenderer.setNoUpdatesAvailableSection();
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.Error) {
+      updaterRenderer.setUpdaterErrorSection();
+    }
 
     document.querySelector('#cancel-config-changes').onclick = () => {
       closeCurrentScreen();
@@ -3021,6 +3136,7 @@ async function openConfig(configItem = null) {
         assistantConfig['speakerSource'] = speakerSourceSelector.value;
         assistantConfig['displayPreference'] = displayPreferenceSelector.value;
         assistantConfig['windowBorder'] = winBorderSelector.value;
+        assistantConfig['autoDownloadUpdates'] = autoDownloadUpdates.checked;
         assistantConfig['launchAtStartup'] = launchAtStartUp.checked;
         assistantConfig['notifyOnStartup'] = notifyOnStartUp.checked;
         assistantConfig['alwaysCloseToTray'] = alwaysCloseToTray.checked;
@@ -3059,6 +3175,7 @@ async function openConfig(configItem = null) {
         }
 
         setAssistantWindowBorder();
+        updaterRenderer.autoDownloadUpdates = assistantConfig.autoDownloadUpdates;
 
         mic.setDeviceId(assistantConfig['microphoneSource']);
         hotwordDetector.setMicrophone(assistantConfig['microphoneSource']);
@@ -3174,13 +3291,18 @@ function updateNav() {
       alt="Next Result"
     >
 
-    <img
+    <div
       id="settings-btn"
       class="ico-btn"
       type="icon"
-      src="../res/settings_btn.svg"
-      alt="Settings"
+      style="display: inline-block;"
     >
+      <img
+        type="icon"
+        src="../res/settings_btn.svg"
+        alt="Settings"
+      >
+    </div>
   `;
 
   document.querySelector('#nav-region').innerHTML = newNav;
@@ -4317,7 +4439,7 @@ function showGetTokenScreen(oauthValidationCallback, authUrl) {
     }
 
     document.querySelector('#loader-area').innerHTML = `
-      <div class="determinate-progress"></div>
+      <div class="determinate-progress progress-countdown-ten-secs"></div>
     `;
 
     // Disable suggestions
@@ -5310,51 +5432,51 @@ assistantInput.addEventListener('keyup', (event) => {
 
 // Check updates
 
-function updateAvailable(releasesData) {
-  return (
-    releasesData
-    && releasesData[0] !== 'Error'
-    && releasesData[0]['tag_name'] !== `v${app.getVersion()}`
-  );
-}
+// function updateAvailable(releasesData) {
+//   return (
+//     releasesData
+//     && releasesData[0] !== 'Error'
+//     && releasesData[0]['tag_name'] !== `v${app.getVersion()}`
+//   );
+// }
 
-function displayUpdateAvailable() {
-  displayQuickMessage('Update Available!');
-}
+// function displayUpdateAvailable() {
+//   displayQuickMessage('Update Available!');
+// }
 
-function fetchReleasesAndCheckUpdates() {
-  if (!releases) {
-    // API request is only done once to avoid Error 403 (Rate Limit Exceeded)
-    // when Assistant is launched many times...
+// function fetchReleasesAndCheckUpdates() {
+//   if (!releases) {
+//     // API request is only done once to avoid Error 403 (Rate Limit Exceeded)
+//     // when Assistant is launched many times...
 
-    (async () => {
-      const releasesData = await getReleases();
+//     (async () => {
+//       const releasesData = await getReleases();
 
-      if (updateAvailable(releasesData)) {
-        displayUpdateAvailable();
-      }
-      else {
-        console.log(...consoleMessage('No Updates Available!'));
-      }
-    })();
-  }
-  else {
-    console.group(...consoleMessage('Fetched releases'));
-    console.log('RELEASES:', releases);
-    console.groupEnd();
+//       if (updateAvailable(releasesData)) {
+//         displayUpdateAvailable();
+//       }
+//       else {
+//         console.log(...consoleMessage('No Updates Available!'));
+//       }
+//     })();
+//   }
+//   else {
+//     console.group(...consoleMessage('Fetched releases'));
+//     console.log('RELEASES:', releases);
+//     console.groupEnd();
 
-    if (updateAvailable(releases)) {
-      displayUpdateAvailable();
-      console.log(...consoleMessage('Updates Available'));
-    }
-    else {
-      console.log(...consoleMessage('No updates available'));
-    }
-  }
-}
+//     if (updateAvailable(releases)) {
+//       displayUpdateAvailable();
+//       console.log(...consoleMessage('Updates Available'));
+//     }
+//     else {
+//       console.log(...consoleMessage('No updates available'));
+//     }
+//   }
+// }
 
-// Fetch releases and check for updates initially
-fetchReleasesAndCheckUpdates();
+// // Fetch releases and check for updates initially
+// fetchReleasesAndCheckUpdates();
 
 // Set Initial Screen
 
@@ -5478,3 +5600,13 @@ ipcRenderer.on('request-mic-toggle', () => {
 ipcRenderer.on('window-will-close', () => {
   stopAudioAndMic();
 });
+
+if (!firstLaunch) {
+  if (flags.appVersion !== getVersion()) {
+    displayQuickMessage('App was updated successfully', true);
+    flags.appVersion = getVersion();
+
+    fs.writeFileSync(flagsFilePath, JSON.stringify(flags));
+    ipcRenderer.send('update-flags', flags);
+  }
+}
