@@ -1,8 +1,11 @@
 // @ts-nocheck
 
+const fs = require('fs');
+const path = require('path');
+const child_process = require('child_process');
 const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
-const { ipcMain } = require('electron');
+const { ipcMain, dialog } = require('electron');
 const UpdaterStatus = require('./updaterStatus');
 
 /**
@@ -26,6 +29,7 @@ class UpdaterService {
     this.rendererWindow = rendererWindow;
     this.app = app;
     this.shouldAutoDownload = shouldAutoDownload;
+    this.postUpdateDownloadInfo = null;
 
     autoUpdater.autoDownload = false;
   }
@@ -41,13 +45,16 @@ class UpdaterService {
     autoUpdater.logger = log;
     autoUpdater.logger.transports.file.level = 'info';
 
+    /** @type {string?} */
+    this.currentStatus = null;
+
     autoUpdater.setFeedURL({
       provider: 'github',
       owner: 'Cruzer-Blade',
       repo: 'g-assist-unofficial-temp-release',
     });
 
-    log.info('App starting...');
+    log.info('Starting Updater Service...');
     autoUpdater.checkForUpdates();
 
     autoUpdater.on('checking-for-update', () => {
@@ -80,6 +87,7 @@ class UpdaterService {
     });
 
     autoUpdater.on('update-downloaded', (info) => {
+      this.postUpdateDownloadInfo = info;
       this.sendStatusToWindow(UpdaterStatus.UpdateDownloaded, info);
       onUpdateReady();
     });
@@ -91,7 +99,7 @@ class UpdaterService {
     });
 
     ipcMain.on('update:installUpdateAndRestart', () => {
-      this.installUpdateAndRestart();
+      this.installUpdateAndRestart(this.postUpdateDownloadInfo);
     });
 
     ipcMain.on('update:downloadUpdate', () => {
@@ -100,29 +108,105 @@ class UpdaterService {
   }
 
   /**
-   * Sends the updater status and args to renderer process
+   * Sends the updater status and args to renderer process.
+   * Also updates the current status in the updater service.
    *
    * @param {string} status
    * @param {any} arg
    */
   sendStatusToWindow(status, arg) {
+    this.currentStatus = status;
     this.rendererWindow.webContents.send(status, arg);
   }
 
   /**
-   * Updates the application and then restarts it
+   * Installs update on MacOS
+   * 
+   * @param {() => void} onUpdateApplied
+   * Callback function called after update is installed
    */
-  installUpdateAndRestart() {
-    this.app.isQuitting = true;
-    autoUpdater.quitAndInstall(true, true);
+  installMacUpdate(onUpdateApplied) {
+    const { downloadedFile } = this.postUpdateDownloadInfo;
+    const cacheFolder = path.dirname(downloadedFile);
+
+    // Path to the `.app` folder
+    const appPath = path.resolve(this.app.getAppPath(), '../../..');
+    const appPathParent = path.dirname(appPath);
+
+    this.sendStatusToWindow(UpdaterStatus.InstallingUpdate, {
+      downloadedFile,
+      cacheFolder,
+      appPath,
+      appPathParent,
+    });
+
+    if (fs.existsSync(`${cacheFolder}/Google Assistant.app`)) {
+      child_process.execSync(`rm -rf "${cacheFolder}/Google Assistant.app"`);
+    }
+
+    // Extract the downloaded archive
+    const appExtractionCmd = `ditto -x -k "${downloadedFile}" "${cacheFolder}"`;
+
+    child_process.exec(appExtractionCmd, (err, stdout, stderr) => {
+      if (err) {
+        dialog.showMessageBoxSync({
+          type: 'error',
+          message: 'Error occurred while extracting archive',
+          detail: err.message,
+        });
+
+        return;
+      }
+
+      // Delete existing `.app` in application directory
+      // to avoid problems with moving the updated version
+      // to the destination.
+
+      child_process.execSync(`rm -rf "${appPath}"`);
+
+      // Copy the extracted `.app` to the application directory
+      child_process.execSync([
+        'mv',
+        `"${cacheFolder}/Google Assistant.app"`,
+        `"${appPathParent}"`,
+      ].join(' '));
+
+      this.sendStatusToWindow(UpdaterStatus.UpdateApplied, null);
+      onUpdateApplied();
+    });
   }
 
   /**
-   * Quits the application and then updates it
+   * Restarts the application after applying update
    */
-  quitAndInstallUpdate() {
+  installUpdateAndRestart() {
     this.app.isQuitting = true;
-    autoUpdater.quitAndInstall(true);
+
+    if (process.platform !== 'darwin') {
+      autoUpdater.quitAndInstall(true, true);
+    }
+    else {
+      this.installMacUpdate(() => {
+        this.app.relaunch();
+        this.app.quit();
+      });
+    }
+  }
+
+  /**
+   * Quits the application after applying update
+   */
+  installUpdateAndQuit() {
+    this.app.isQuitting = true;
+
+    if (process.platform != 'darwin') {
+      autoUpdater.quitAndInstall(true);
+    }
+    else {
+      this.installMacUpdate(() => {
+        this.app.quit();
+      });
+    }
   }
 
   /**

@@ -12,6 +12,7 @@ const { fallbackModeConfigKeys } = require('./app/src/common/utils');
 
 // Updater daemon
 const UpdaterService = require('./app/src/updater/updaterMain');
+const UpdaterStatus = require('./app/src/updater/updaterStatus');
 
 const {
   app,
@@ -496,7 +497,7 @@ function onAppReady() {
 
     displayNotification({
       title: 'Update Ready',
-      body: 'Update has been downloaded. Restart app to install the update...',
+      body: 'Update has been downloaded. Click to install the update and restart app...',
       onNotificationClick: () => {
         if (!mainWindow.isVisible()) launchAssistant();
         else mainWindow.focus();
@@ -730,14 +731,9 @@ function setTrayContextMenu(assistantHotkey, isUpdateReady = false) {
       ],
     },
     {
-      label: !isUpdateReady ? 'Quit' : 'Quit and Update',
+      label: 'Quit',
       click: () => {
-        if (isUpdateReady) {
-          updater.quitAndInstallUpdate();
-        }
-        else {
-          quitApp();
-        }
+        quitApp();
       },
     },
     {
@@ -753,7 +749,17 @@ function setTrayContextMenu(assistantHotkey, isUpdateReady = false) {
     trayContextMenu.insert(
       trayContextMenu.items.length - 1,
       new MenuItem({
-        label: 'Restart to Update',
+        label: 'Update and Quit',
+        click: () => {
+          updater.installUpdateAndQuit();
+        },
+      }),
+    );
+
+    trayContextMenu.insert(
+      trayContextMenu.items.length - 1,
+      new MenuItem({
+        label: 'Update and Restart',
         click: () => {
           updater.installUpdateAndRestart();
         },

@@ -327,6 +327,11 @@ updaterRenderer.onUpdateDownloaded = () => {
   displayQuickMessage('Restart app to update');
 };
 
+updaterRenderer.onUpdateApplied = () => {
+  if (process.platform !== 'darwin') return;
+  displayQuickMessage('Restart app to new version');
+};
+
 const config = {
   auth: {
     keyFilePath: assistantConfig['keyFilePath'],
@@ -2893,7 +2898,7 @@ async function openConfig(configItem = null) {
     document.querySelector('#check-for-update-btn').onclick = () => UpdaterRenderer.requestCheckForUpdates();
 
     if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateDownloaded) {
-      updaterRenderer.setRestartToUpdateSection();
+      updaterRenderer.setUpdateAndRestartSection();
     }
     else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateAvailable) {
       const updaterCurrentInfo = JSON.parse(sessionStorage.getItem('updaterCurrentInfo'));
@@ -2904,6 +2909,9 @@ async function openConfig(configItem = null) {
     }
     else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.Error) {
       updaterRenderer.setUpdaterErrorSection();
+    }
+    else if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.InstallingUpdate) {
+      updaterRenderer.setInstallingUpdatesSection();
     }
 
     document.querySelector('#cancel-config-changes').onclick = () => {

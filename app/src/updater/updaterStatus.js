@@ -7,6 +7,8 @@ const UpdaterStatus = {
   UpdateNotAvailable: 'UpdateNotAvailable',
   UpdateDownloaded: 'UpdateDownloaded',
   DownloadProgress: 'DownloadProgress',
+  InstallingUpdate: 'InstallingUpdate',
+  UpdateApplied: 'UpdateApplied',
   Error: 'Error',
 };
 
