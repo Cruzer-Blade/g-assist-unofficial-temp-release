@@ -77,6 +77,10 @@ const p5jsMic = new p5.AudioIn();
 // Add click listener for "Settings" button
 document.querySelector('#settings-btn').onclick = () => openConfig();
 
+if (!firstLaunch) {
+  ipcRenderer.send('update-did-launch-window');
+}
+
 // Notify the main process that first launch is completed
 ipcRenderer.send('update-first-launch');
 
@@ -97,6 +101,31 @@ navigator.mediaDevices
     canAccessMicrophone = false;
     displayQuickMessage('Microphone is not accessible');
   });
+
+// Set settings badge
+
+if (sessionStorage.getItem('updaterStatus') === UpdaterStatus.UpdateDownloaded) {
+  document.querySelector('#settings-btn')?.classList.add('active-badge');
+}
+
+// Load global flags
+
+if (fs.existsSync(flagsFilePath)) {
+  const savedFlags = JSON.parse(fs.readFileSync(flagsFilePath));
+  Object.assign(flags, savedFlags);
+}
+
+// Display a quick message stating the app was updated
+
+if (!firstLaunch) {
+  if (flags.appVersion !== getVersion()) {
+    displayQuickMessage('App was updated successfully', true);
+    flags.appVersion = getVersion();
+
+    fs.writeFileSync(flagsFilePath, JSON.stringify(flags));
+    ipcRenderer.send('update-flags', flags);
+  }
+}
 
 // Initialize Configuration
 if (fs.existsSync(configFilePath)) {
@@ -234,13 +263,6 @@ else {
       'Click through the welcome screens to proceed.',
     ].join(' '));
   }
-}
-
-// Load global flags
-
-if (fs.existsSync(flagsFilePath)) {
-  const savedFlags = JSON.parse(fs.readFileSync(flagsFilePath));
-  Object.assign(flags, savedFlags);
 }
 
 // Setup Assistant Window
@@ -4206,6 +4228,9 @@ function updateReleases(releasesObject) {
 function displayQuickMessage(message, allowOnlyOneMessage = false) {
   const navRegion = document.querySelector('#nav-region');
 
+  // Exit from function when window is not displayed
+  if (!navRegion) return;
+
   // Show the message only when no other message is showing up.
   // If `allowOlyOneMessage` is `true`
   if (allowOnlyOneMessage && navRegion.querySelector('.quick-msg')) return;
@@ -5608,17 +5633,3 @@ ipcRenderer.on('request-mic-toggle', () => {
 ipcRenderer.on('window-will-close', () => {
   stopAudioAndMic();
 });
-
-if (!firstLaunch) {
-  if (flags.appVersion !== getVersion()) {
-    displayQuickMessage('App was updated successfully', true);
-    flags.appVersion = getVersion();
-
-    fs.writeFileSync(flagsFilePath, JSON.stringify(flags));
-    ipcRenderer.send('update-flags', flags);
-  }
-}
-
-if (sessionStorage.getItem('updateVsersion')) {
-  document.querySelector('#settings-btn')?.classList.add('active-badge');
-}

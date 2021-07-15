@@ -12,7 +12,6 @@ const { fallbackModeConfigKeys } = require('./app/src/common/utils');
 
 // Updater daemon
 const UpdaterService = require('./app/src/updater/updaterMain');
-const UpdaterStatus = require('./app/src/updater/updaterStatus');
 
 const {
   app,
@@ -27,6 +26,7 @@ const {
 let mainWindow;
 let tray;
 let readyForLaunch = false;
+let didLaunchWindow = false;
 let assistantWindowLaunchArgs = {};
 global.releases = null;
 global.firstLaunch = true;
@@ -352,6 +352,16 @@ function onAppReady() {
       debugLog('Setting "Ready for launch" tray icon');
       tray.setImage(trayIcon);
 
+      // Do not auto-reveal window if an update is pending
+      // to be installed.
+
+      // @TODO: Auto-reveal suppression not working
+
+      if (shouldAutoInstallUpdate()) {
+        debugLog('Supressing window auto-reveal [auto-update on startup]');
+        return;
+      }
+
       if (!assistantConfig['hideOnFirstLaunch'] || flags.appVersion !== `v${app.getVersion()}`) {
         if (!openedAtLogin) {
           if (!assistantConfig['hideOnFirstLaunch']) {
@@ -366,63 +376,30 @@ function onAppReady() {
       }
       else if (assistantConfig['notifyOnStartup']) {
         // Notify user when app is ready
-
-        const title = 'Google Assistant';
-        const body = [
-          'Google Assistant is running in background!',
-          `Press ${assistantConfig.assistantHotkey
-            .split('+')
-            .map(getNativeKeyName)
-            .join(' + ')
-          } to launch`,
-        ].join('\n\n');
-
-        const icon = nativeImage.createFromPath(
-          path.join(__dirname, 'app', 'res', 'icons', 'icon.png'),
-        );
-
-        debugLog('Sending "app-ready-to-launch" notification');
-
-        if (process.platform === 'win32') {
-          tray.displayBalloon({
-            title,
-            content: body,
-            icon,
-          });
-
-          tray.on('balloon-click', () => {
-            // Launch the assistant when balloon is clicked.
-            launchAssistant();
-          });
-        }
-        else {
-          const notification = new electron.Notification({
-            title,
-            body,
-            icon,
-            actions: [
-              { type: 'button', text: 'Launch' },
-              { type: 'button', text: 'Dismiss' },
-            ],
-          });
-
-          notification.on('action', (_, index) => {
-            switch (index) {
-              case 0:
-                launchAssistant();
-                break;
-
-              default:
-            }
-          });
-
-          notification.on('click', () => {
-            // Launch the assistant when notification is clicked.
-            launchAssistant();
-          });
-
-          notification.show();
-        }
+        displayNotification({
+          title: 'Google Assistant',
+          body: [
+            'Google Assistant is running in background!',
+            `Press ${assistantConfig.assistantHotkey
+              .split('+')
+              .map(getNativeKeyName)
+              .join(' + ')
+            } to launch`,
+          ].join('\n\n'),
+          actions: [
+            {
+              text: 'Launch',
+              type: 'button',
+              onClick: () => launchAssistant(),
+            },
+            {
+              text: 'Dismiss',
+              type: 'button',
+              onClick: () => {},
+            },
+          ],
+          onNotificationClick: () => launchAssistant(),
+        });
       }
     });
 
@@ -453,12 +430,20 @@ function onAppReady() {
     quitApp();
   });
 
+  ipcMain.on('display-notification', (_, opts) => {
+    displayNotification(opts);
+  });
+
   ipcMain.on('update-releases', (_, releases) => {
     global.releases = releases;
   });
 
   ipcMain.on('update-first-launch', () => {
     global.firstLaunch = false;
+  });
+
+  ipcMain.on('update-did-launch-window', () => {
+    didLaunchWindow = true;
   });
 
   ipcMain.on('update-config', (_, config) => {
@@ -495,14 +480,27 @@ function onAppReady() {
     setTrayContextMenu(assistantConfig.assistantHotkey, true);
     mainWindow.webContents.send('update:updateReady');
 
-    displayNotification({
-      title: 'Update Ready',
-      body: 'Update has been downloaded. Click to install the update and restart app...',
-      onNotificationClick: () => {
-        if (!mainWindow.isVisible()) launchAssistant();
-        else mainWindow.focus();
-      },
-    });
+    // Auto-install update on next startup
+    if (shouldAutoInstallUpdate()) {
+      displayNotification({
+        title: 'Installing update',
+        body: 'Assistant is installing the update and will restart once done',
+      });
+
+      setTimeout(() => {
+        updater.installUpdateAndRestart();
+      }, 500);
+    }
+    else {
+      displayNotification({
+        title: 'Update Ready',
+        body: 'Update has been downloaded. Click to install the update and restart app...',
+        onNotificationClick: () => {
+          if (!mainWindow.isVisible()) launchAssistant();
+          else mainWindow.focus();
+        },
+      });
+    }
   });
 }
 
@@ -616,6 +614,14 @@ function restartInNormalMode() {
   });
 
   quitApp();
+}
+
+/**
+ * Checks for criterion for auto-installing downloaded update
+ */
+function shouldAutoInstallUpdate() {
+  // @TODO Add setting auto-install updates (check for windows and linux as well)
+  return !didLaunchWindow && assistantConfig.autoDownloadUpdates && updater._isDownloadCached;
 }
 
 /**

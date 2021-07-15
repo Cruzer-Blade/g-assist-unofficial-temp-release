@@ -30,6 +30,7 @@ class UpdaterService {
     this.app = app;
     this.shouldAutoDownload = shouldAutoDownload;
     this.postUpdateDownloadInfo = null;
+    this._isDownloadCached = false;
 
     autoUpdater.autoDownload = false;
   }
@@ -44,6 +45,26 @@ class UpdaterService {
   initializeUpdater(onUpdateReady) {
     autoUpdater.logger = log;
     autoUpdater.logger.transports.file.level = 'info';
+
+    // @TODO: Change log file path
+    autoUpdater.logger.transports.file.resolve = () => '/Applications/updaterLog.log'
+
+    autoUpdater.logger._info = autoUpdater.logger.info;
+
+    // Monkey patch logger's info function
+    autoUpdater.logger.info = (message) => {
+      // Check if the downloaded update is loaded from
+      // cache and set the `_isDownloadCached` property
+
+      if (
+        typeof message === 'string'
+        && message.includes('Update has already been downloaded')
+      ) {
+        this._isDownloadCached = true;
+      }
+
+      autoUpdater.logger._info(message);
+    }
 
     /** @type {string?} */
     this.currentStatus = null;
