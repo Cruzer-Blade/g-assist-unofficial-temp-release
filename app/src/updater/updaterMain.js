@@ -33,6 +33,7 @@ class UpdaterService {
     this._isDownloadCached = false;
 
     autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
   }
 
   /**
