@@ -2,11 +2,14 @@
 
 const fs = require('fs');
 const path = require('path');
+const process = require('process');
 const child_process = require('child_process');
 const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
 const { ipcMain, dialog } = require('electron');
-const UpdaterStatus = require('./updaterStatus');
+const { updaterGeneric } = require('./updaterGeneric');
+const { UpdaterStatus } = require('./updaterUtils');
+const { isSnap, isDebOrRpm } = require('../common/utils');
 
 /**
  * Main process updater service
@@ -37,6 +40,14 @@ class UpdaterService {
   }
 
   /**
+   * Checks if a generic updater should be used over electron
+   * auto-updater based on platform and package format.
+   */
+  static shouldUseGenericUpdater() {
+    return isDebOrRpm() || isSnap();
+  }
+
+  /**
    * Initializes updater with event listeners
    *
    * @param {() => void} onUpdateReady
@@ -44,75 +55,104 @@ class UpdaterService {
    * and is ready to be installed.
    */
   initializeUpdater(onUpdateReady) {
-    autoUpdater.logger = log;
-    autoUpdater.logger.transports.file.level = 'info';
-
-    // @TODO: Change log file path
-    autoUpdater.logger.transports.file.resolve = () => '/Applications/updaterLog.log'
-
-    autoUpdater.logger._info = autoUpdater.logger.info;
-
-    // Monkey patch logger's info function
-    autoUpdater.logger.info = (message) => {
-      // Check if the downloaded update is loaded from
-      // cache and set the `_isDownloadCached` property
-
-      if (
-        typeof message === 'string'
-        && message.includes('Update has already been downloaded')
-      ) {
-        this._isDownloadCached = true;
-      }
-
-      autoUpdater.logger._info(message);
-    }
-
-    /** @type {string?} */
-    this.currentStatus = null;
-
-    autoUpdater.setFeedURL({
-      provider: 'github',
-      owner: 'Cruzer-Blade',
-      repo: 'g-assist-unofficial-temp-release',
-    });
-
     log.info('Starting Updater Service...');
-    autoUpdater.checkForUpdates();
 
-    autoUpdater.on('checking-for-update', () => {
-      this.sendStatusToWindow(UpdaterStatus.CheckingForUpdates);
-    });
+    if (!UpdaterService.shouldUseGenericUpdater()) {
+      autoUpdater.logger = log;
+      autoUpdater.logger.transports.file.level = 'info';
 
-    autoUpdater.on('update-available', (info) => {
-      this.sendStatusToWindow(UpdaterStatus.UpdateAvailable, info);
+      // @TODO: Change log file path
+      autoUpdater.logger.transports.file.resolve = () => '/Applications/updaterLog.log'
 
-      if (this.shouldAutoDownload) {
-        autoUpdater.downloadUpdate();
+      autoUpdater.logger._info = autoUpdater.logger.info;
+
+      // Monkey patch logger's info function
+      autoUpdater.logger.info = (message) => {
+        // Check if the downloaded update is loaded from
+        // cache and set the `_isDownloadCached` property
+
+        if (
+          typeof message === 'string'
+          && message.includes('Update has already been downloaded')
+        ) {
+          this._isDownloadCached = true;
+        }
+
+        autoUpdater.logger._info(message);
       }
-    });
 
-    autoUpdater.on('update-not-available', (info) => {
-      this.sendStatusToWindow(UpdaterStatus.UpdateNotAvailable, info);
-    });
+      /** @type {string?} */
+      this.currentStatus = null;
 
-    autoUpdater.on('error', (err) => {
-      this.sendStatusToWindow(UpdaterStatus.Error, err);
-    });
+      /** @type {object?} */
+      this.currentInfo = null;
 
-    autoUpdater.on('download-progress', (progressObj) => {
-      let logMessage = `Download speed: ${progressObj.bytesPerSecond}`;
-      logMessage = `${logMessage} - Downloaded ${progressObj.percent}%`;
-      logMessage = `${logMessage} (${progressObj.transferred} / ${progressObj.total})`;
-      console.log(logMessage);
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'Cruzer-Blade',
+        repo: 'g-assist-unofficial-temp-release',
+      });
 
-      this.sendStatusToWindow(UpdaterStatus.DownloadProgress, progressObj);
-    });
+      autoUpdater.on('checking-for-update', () => {
+        this.sendStatusToWindow(UpdaterStatus.CheckingForUpdates);
+      });
 
-    autoUpdater.on('update-downloaded', (info) => {
-      this.postUpdateDownloadInfo = info;
-      this.sendStatusToWindow(UpdaterStatus.UpdateDownloaded, info);
-      onUpdateReady();
-    });
+      autoUpdater.on('update-available', (info) => {
+        this.sendStatusToWindow(UpdaterStatus.UpdateAvailable, info);
+
+        if (this.shouldAutoDownload) {
+          autoUpdater.downloadUpdate();
+        }
+      });
+
+      autoUpdater.on('update-not-available', (info) => {
+        this.sendStatusToWindow(UpdaterStatus.UpdateNotAvailable, info);
+      });
+
+      autoUpdater.on('error', (err) => {
+        this.sendStatusToWindow(UpdaterStatus.Error, err);
+      });
+
+      autoUpdater.on('download-progress', (progressObj) => {
+        let logMessage = `Download speed: ${progressObj.bytesPerSecond}`;
+        logMessage = `${logMessage} - Downloaded ${progressObj.percent}%`;
+        logMessage = `${logMessage} (${progressObj.transferred} / ${progressObj.total})`;
+        console.log(logMessage);
+
+        this.sendStatusToWindow(UpdaterStatus.DownloadProgress, progressObj);
+      });
+
+      autoUpdater.on('update-downloaded', (info) => {
+        this.postUpdateDownloadInfo = info;
+        this.sendStatusToWindow(UpdaterStatus.UpdateDownloaded, info);
+        onUpdateReady();
+      });
+
+      // Check for updates
+      autoUpdater.checkForUpdates();
+    }
+    else {
+      updaterGeneric.logger = log;
+
+      updaterGeneric.on('checking-for-update', () => {
+        this.sendStatusToWindow(UpdaterStatus.CheckingForUpdates);
+      });
+
+      updaterGeneric.on('update-available', (info) => {
+        this.sendStatusToWindow(UpdaterStatus.UpdateAvailable, info);
+      });
+
+      updaterGeneric.on('update-not-available', () => {
+        this.sendStatusToWindow(UpdaterStatus.UpdateNotAvailable);
+      });
+
+      updaterGeneric.on('error', (err) => {
+        this.sendStatusToWindow(UpdaterStatus.Error, err);
+      });
+
+      // Check for updates
+      updaterGeneric.checkForUpdates();
+    }
 
     // IPC messages
 
@@ -125,7 +165,12 @@ class UpdaterService {
     });
 
     ipcMain.on('update:downloadUpdate', () => {
-      autoUpdater.downloadUpdate();
+      if (!UpdaterService.shouldUseGenericUpdater()) {
+        autoUpdater.downloadUpdate();
+      }
+      else {
+        updaterGeneric.downloadUpdate();
+      }
     });
   }
 
@@ -133,17 +178,21 @@ class UpdaterService {
    * Sends the updater status and args to renderer process.
    * Also updates the current status in the updater service.
    *
-   * @param {string} status
-   * @param {any} arg
+   * @param {string?} status
+   * @param {any?} arg
    */
   sendStatusToWindow(status, arg) {
-    this.currentStatus = status;
-    this.rendererWindow.webContents.send(status, arg);
+    const currentStatus = status ?? this.currentStatus;
+    const currentInfo = arg ?? this.currentInfo;
+
+    this.currentStatus = currentStatus;
+    this.currentInfo = currentInfo;
+    this.rendererWindow.webContents.send(currentStatus, currentInfo);
   }
 
   /**
    * Installs update on MacOS
-   * 
+   *
    * @param {() => void} onUpdateApplied
    * Callback function called after update is installed
    */
@@ -235,7 +284,12 @@ class UpdaterService {
    * Checks for an update and notifies the user when available
    */
   static checkForUpdates() {
-    autoUpdater.checkForUpdates();
+    if (!UpdaterService.shouldUseGenericUpdater()) {
+      autoUpdater.checkForUpdates();
+    }
+    else {
+      updaterGeneric.checkForUpdates();
+    }
   }
 }
 

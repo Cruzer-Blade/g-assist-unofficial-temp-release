@@ -20,6 +20,7 @@ const {
   MenuItem,
   nativeImage,
   ipcMain,
+  dialog,
   shell: electronShell,
 } = electron;
 
@@ -67,7 +68,7 @@ process.on('uncaughtException', async (err) => {
   debugLog(errorMessage, 'error');
 
   if (app.isReady()) {
-    const buttonIndex = await electron.dialog.showMessageBox(null, {
+    const buttonIndex = await dialog.showMessageBox(null, {
       title: 'Error',
       type: 'error',
       message: 'An unhandled exception occurred in the main process',
@@ -81,7 +82,7 @@ process.on('uncaughtException', async (err) => {
     }
   }
   else {
-    electron.dialog.showErrorBox(
+    dialog.showErrorBox(
       'An unhandled exception occurred in the main process',
       errorMessage.trimStart(),
     );
@@ -106,6 +107,8 @@ else {
   process.env.FALLBACK_MODE = false;
 }
 
+// Read config
+
 if (fs.existsSync(configFilePath)) {
   debugLog('Reading Assistant Config');
   const savedConfig = JSON.parse(fs.readFileSync(configFilePath));
@@ -128,6 +131,8 @@ else {
   debugLog('Config file does not exist.');
 }
 
+// Read flags
+
 if (fs.existsSync(flagsFilePath)) {
   debugLog('Reading flags');
   const savedFlags = JSON.parse(fs.readFileSync(flagsFilePath));
@@ -136,7 +141,10 @@ if (fs.existsSync(flagsFilePath)) {
   debugLog('Successfully read flags');
 }
 else {
-  debugLog('Flags file does not exist.');
+  debugLog('Flags file does not exist. Creating file...');
+
+  flags.appVersion = `v${app.getVersion()}`;
+  fs.writeFileSync(flagsFilePath, JSON.stringify(flags));
 }
 
 // Set TMPDIR environment variable for linux snap
@@ -172,7 +180,7 @@ if (!gotInstanceLock) {
   if (isDevMode()) {
     debugLog('Another instance is already running', 'warn');
 
-    electron.dialog.showErrorBox(
+    dialog.showErrorBox(
       'Preventing launch',
       [
         'An instance of Google Assistant is already running.',
@@ -401,6 +409,9 @@ function onAppReady() {
           onNotificationClick: () => launchAssistant(),
         });
       }
+
+      // Send updater status to renderer process
+      updater.sendStatusToWindow();
     });
 
   mainWindow.hide();
@@ -432,6 +443,10 @@ function onAppReady() {
 
   ipcMain.on('display-notification', (_, opts) => {
     displayNotification(opts);
+  });
+
+  ipcMain.on('display-dialog', (event, opts) => {
+    event.returnValue = dialog.showMessageBoxSync(mainWindow, opts);
   });
 
   ipcMain.on('update-releases', (_, releases) => {

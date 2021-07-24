@@ -127,8 +127,9 @@
         "electron-is-accelerator": "^0.2.0",
         "electron-log": "^4.3.5",
         "electron-updater": "^4.3.9",
-        "google-assistant": "git://github.com/Melvin-Abraham/google-assistant.git#g-assist",
-        "grpc": "1.24.6"
+        "google-assistant": "github:Melvin-Abraham/google-assistant#g-assist",
+        "grpc": "1.24.6",
+        "node-fetch": "^2.6.1"
     },
     "devDependencies": {
         "electron": "10.3.2",

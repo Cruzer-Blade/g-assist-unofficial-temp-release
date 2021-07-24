@@ -1,7 +1,8 @@
 /* eslint-disable class-methods-use-this */
 
-const { ipcRenderer } = require('electron');
-const UpdaterStatus = require('./updaterStatus');
+const { ipcRenderer, clipboard } = require('electron');
+const { UpdaterStatus } = require('./updaterUtils');
+const { isSnap, displayDialog } = require('../common/utils');
 
 class UpdaterRenderer {
   constructor(opts = {
@@ -98,16 +99,6 @@ class UpdaterRenderer {
       sessionStorage.setItem('updaterCurrentInfo', JSON.stringify(info));
 
       this.setUpdateAndRestartSection();
-
-      // Set badge in the settings button to let the user
-      // that the update is ready to be installed.
-
-      const settingsButton = document.querySelector('#settings-btn');
-
-      if (settingsButton) {
-        settingsButton.classList.add('active-badge');
-      }
-
       this.onUpdateDownloaded(info);
     });
 
@@ -125,6 +116,27 @@ class UpdaterRenderer {
       this.setUpdateAppliedSection();
       this.onUpdateApplied();
     });
+
+    // Invoke callbacks based on current status
+
+    switch (sessionStorage.getItem('updaterStatus')) {
+      case UpdaterStatus.UpdateAvailable:
+        const updateAvailableInfo = JSON.parse(sessionStorage.getItem('updaterCurrentInfo'));
+        this.onUpdateAvailable(updateAvailableInfo);
+        break;
+
+      case UpdaterStatus.UpdateDownloaded:
+        const updateDownloadedInfo = JSON.parse(sessionStorage.getItem('updaterCurrentInfo'));
+        this.onUpdateDownloaded(updateDownloadedInfo);
+        break;
+
+      case UpdaterStatus.UpdateApplied:
+        this.onUpdateApplied();
+        break;
+
+      default:
+        // no-op
+    }
   }
 
   /**
@@ -156,7 +168,7 @@ class UpdaterRenderer {
    * New Update Info
    */
   setDownloadUpdateSection(info) {
-    if (!this.autoDownloadUpdates && UpdaterRenderer.isSettingsVisible()) {
+    if (UpdaterRenderer.isSettingsVisible()) {
       const checkForUpdateSection = document.querySelector('#check-for-update-section');
 
       checkForUpdateSection.innerHTML = `
@@ -176,7 +188,7 @@ class UpdaterRenderer {
             </span>
           </span>
           <label id="download-update-btn" class="button setting-item-button">
-            Download update
+            ${(!isSnap()) ? 'Download update' : 'Learn more'}
           </label>
           <span
             id="check-for-update-btn"
@@ -188,9 +200,52 @@ class UpdaterRenderer {
         </div>
       `;
 
+      /**
+       * Show snap update info
+       */
+      const showSnapUpdateDoc = () => {
+        const snapRefreshCommand = 'sudo snap refresh g-assist';
+
+        const res = displayDialog({
+          type: 'info',
+          message: 'Snap update',
+          detail: [
+            'Snaps generally update automatically, so there\'s no need to force an update. ',
+            'You will probably be able to use the latest version from the next session by restarting the app (provided some time is given for auto-update to complete).\n\n',
+            `In case the snap package does not update automatically, you can force an update by typing "${snapRefreshCommand}" in the terminal and restarting the app.`,
+          ].join(''),
+          buttons: [
+            'Restart app',
+            'Copy update command',
+            'OK',
+          ],
+          cancelId: 2,
+        });
+
+        switch (res) {
+          case 0:
+            console.log('Restarting app');
+            ipcRenderer.send('restart-normal');
+            break;
+
+          case 1:
+            clipboard.writeText(snapRefreshCommand);
+            break;
+
+          default:
+            // no-op
+        }
+      }
+
       /** @type {HTMLElement} */
       const downloadUpdateButton = checkForUpdateSection.querySelector('#download-update-btn');
-      downloadUpdateButton.onclick = () => UpdaterRenderer.requestDownloadUpdate();
+
+      if (!isSnap()) {
+        downloadUpdateButton.onclick = () => UpdaterRenderer.requestDownloadUpdate();
+      }
+      else {
+        downloadUpdateButton.onclick = () => showSnapUpdateDoc();
+      }
 
       /** @type {HTMLElement} */
       const checkForUpdatesButton = checkForUpdateSection.querySelector('#check-for-update-btn');
@@ -265,7 +320,7 @@ class UpdaterRenderer {
    * Set the Installing Update status in the `About`
    * section. Typically to be used when the updater
    * is installing the update.
-   * 
+   *
    * @platform MacOS
    */
   setInstallingUpdatesSection() {
@@ -287,7 +342,7 @@ class UpdaterRenderer {
    * Set the Update Installation Complete status in the
    * `About` section. Typically to be used when the updater
    * has completed installing the downloaded update.
-   * 
+   *
    * @platform MacOS
    */
   setUpdateAppliedSection() {
