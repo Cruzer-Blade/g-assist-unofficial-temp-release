@@ -187,6 +187,8 @@ class UpdaterService {
 
     this.currentStatus = currentStatus;
     this.currentInfo = currentInfo;
+
+    if (this.rendererWindow.isDestroyed()) return;
     this.rendererWindow.webContents.send(currentStatus, currentInfo);
   }
 
