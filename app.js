@@ -212,8 +212,8 @@ else {
     // Switch to current instance if a non dev-mode
     // instance is launched.
     if (!isDevMode(args[0])) {
-      if (!mainWindow.isVisible()) launchAssistant();
-      else mainWindow.focus();
+      if (!mainWindow?.isVisible()) launchAssistant();
+      else mainWindow?.focus();
     }
   });
 
