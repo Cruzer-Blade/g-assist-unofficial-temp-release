@@ -37,4 +37,4 @@ jobs:
       - name: Build
         run: npm run dist
         env:
-          GH_TOKEN: ${{ secrets.GITHIB_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
