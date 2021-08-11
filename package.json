@@ -38,8 +38,8 @@
         "publish": [
             {
                 "provider": "github",
-                "owner": "Melvin-Abraham",
-                "repo": "Google-Assistant-Unofficial-Desktop-Client"
+                "owner": "Cruzer-Blade",
+                "repo": "g-assist-unofficial-temp-release"
             }
         ],
         "win": {
