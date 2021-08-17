@@ -86,6 +86,12 @@ class UpdaterService {
       /** @type {object?} */
       this.currentInfo = null;
 
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'Cruzer-Blade',
+        repo: 'g-assist-unofficial-temp-release',
+      });
+
       autoUpdater.on('checking-for-update', () => {
         this.sendStatusToWindow(UpdaterStatus.CheckingForUpdates);
       });
