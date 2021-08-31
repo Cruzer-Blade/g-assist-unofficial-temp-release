@@ -9,7 +9,7 @@ const { autoUpdater } = require('electron-updater');
 const { ipcMain, dialog } = require('electron');
 const { updaterGeneric } = require('./updaterGeneric');
 const { UpdaterStatus } = require('./updaterUtils');
-const { isSnap, isDebOrRpm, userDataPath } = require('../common/utils');
+const { isSnap, isDebOrRpm } = require('../common/utils');
 
 /**
  * Main process updater service
@@ -41,7 +41,7 @@ class UpdaterService {
 
   /**
    * Checks if a generic updater should be used over electron
-   * auto-updater based on platform and package format.
+   * auto-updater based on platform, package format and environment.
    */
   static shouldUseGenericUpdater() {
     return isDebOrRpm() || isSnap() || process.env.DEV_MODE;
@@ -109,7 +109,7 @@ class UpdaterService {
       });
 
       autoUpdater.on('error', (err) => {
-        this.sendStatusToWindow(UpdaterStatus.Error, err);
+        this.sendStatusToWindow(UpdaterStatus.Error, JSON.stringify({errorMessage: err}));
       });
 
       autoUpdater.on('download-progress', (progressObj) => {
@@ -142,12 +142,12 @@ class UpdaterService {
         this.sendStatusToWindow(UpdaterStatus.UpdateAvailable, info);
       });
 
-      updaterGeneric.on('update-not-available', () => {
-        this.sendStatusToWindow(UpdaterStatus.UpdateNotAvailable);
+      updaterGeneric.on('update-not-available', (info) => {
+        this.sendStatusToWindow(UpdaterStatus.UpdateNotAvailable, info);
       });
 
       updaterGeneric.on('error', (err) => {
-        this.sendStatusToWindow(UpdaterStatus.Error, err);
+        this.sendStatusToWindow(UpdaterStatus.Error, JSON.stringify({errorMessage: err}));
       });
 
       // Check for updates
@@ -172,6 +172,10 @@ class UpdaterService {
         updaterGeneric.downloadUpdate();
       }
     });
+
+    ipcMain.on('update:getChangelog', (event) => {
+      event.returnValue = this.getChangelog();
+    });
   }
 
   /**
@@ -182,6 +186,8 @@ class UpdaterService {
    * @param {any?} arg
    */
   sendStatusToWindow(status, arg) {
+    if (status === undefined) return;
+    
     const currentStatus = status ?? this.currentStatus;
     const currentInfo = arg ?? this.currentInfo;
 
@@ -190,6 +196,17 @@ class UpdaterService {
 
     if (this.rendererWindow.isDestroyed()) return;
     this.rendererWindow.webContents.send(currentStatus, currentInfo);
+  }
+
+  /**
+   * Returns changelog of either the current version or
+   * the new version available as a string of HTML
+   * 
+   * @returns {string?}
+   */
+  getChangelog() {
+    const releaseNotes = this.currentInfo?.releaseNotes;
+    return releaseNotes;
   }
 
   /**
