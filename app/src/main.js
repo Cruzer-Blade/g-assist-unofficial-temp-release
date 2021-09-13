@@ -349,8 +349,11 @@ const updaterRenderer = new UpdaterRenderer({
     // If auto-updates are disabled, notify the user
     // that a new update is available
 
-    if (!assistantConfig.autoDownloadUpdates) {
+    if (!assistantConfig.autoDownloadUpdates || process.env.DEV_MODE) {
       displayQuickMessage('Update Available!');
+    }
+    else {
+      displayQuickMessage('Downloading Update');
     }
 
     sessionStorage.setItem('updateVersion', info.version);
@@ -360,7 +363,16 @@ const updaterRenderer = new UpdaterRenderer({
 
     const settingsButton = document.querySelector('#settings-btn');
 
-    if (settingsButton && (!assistantConfig.autoDownloadUpdates || isDebOrRpm() || isSnap())) {
+    const displaySettingsBadge = (
+      settingsButton && (
+        !assistantConfig.autoDownloadUpdates
+        || process.env.DEV_MODE
+        || isDebOrRpm()
+        || isSnap()
+      )
+    );
+
+    if (displaySettingsBadge) {
       settingsButton.classList.add('active-badge');
     }
   },
